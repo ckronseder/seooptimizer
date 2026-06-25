@@ -24,6 +24,7 @@ chromadb>=1.5.9
 
 # ── Graph & ranking ────────────────────────────────────────────────────────
 networkx>=3.2.1
+scipy>=1.14.1  # required by networkx (pagerank / louvain on Heroku)
 
 # ── Article parsing ────────────────────────────────────────────────────────
 newspaper4k>=0.9.3.1
