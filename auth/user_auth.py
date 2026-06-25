@@ -98,7 +98,11 @@ def register_user(username: str, password: str) -> Tuple[bool, str]:
 
 
 def authenticate_user(username: str, password: str) -> bool:
-    """Authenticate *username* with *password* against the stored credentials.
+    """Authenticate *username* with *password*.
+
+    Checks TinyDB first (registered users).  Falls back to
+    ``AUTH_USERNAME`` / ``AUTH_PASSWORD`` environment variables
+    (for Heroku deployment where the filesystem is ephemeral).
 
     Returns ``True`` if the credentials are valid, ``False`` otherwise.
     """
@@ -106,12 +110,20 @@ def authenticate_user(username: str, password: str) -> bool:
         return False
     username = username.strip()
 
+    # 1. Check TinyDB (users registered during the session)
     db = _get_db()
     User = Query()
     results = db.search(User.username == username)
-    if not results:
-        return False
-    return verify_password(password, results[0]["password_hash"])
+    if results:
+        return verify_password(password, results[0]["password_hash"])
+
+    # 2. Fallback to env vars (for Heroku deployment)
+    env_user = os.environ.get("AUTH_USERNAME", "").strip()
+    env_pass = os.environ.get("AUTH_PASSWORD", "")
+    if env_user and env_pass:
+        return username == env_user and password == env_pass
+
+    return False
 
 
 def reset_password(

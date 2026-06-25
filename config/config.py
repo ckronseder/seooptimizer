@@ -26,6 +26,10 @@ SEO_USERNAME = os.getenv("SEO_USERNAME")
 
 SEO_PASSWORD = os.getenv("SEO_PASSWORD")
 
+AUTH_USERNAME = os.getenv("AUTH_USERNAME")
+
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD")
+
 # ── Non-sensitive configuration ─────────────────────────────────────────────
 BASE_URL = "https://news.google.com/search"
 SEO_post_path = "/v3/dataforseo_labs/google/keyword_suggestions/live"
