@@ -155,6 +155,22 @@ class TestAuthenticateUser:
         assert user_auth.authenticate_user("", "password") is False
         assert user_auth.authenticate_user("user", "") is False
 
+    def test_authenticate_hardcoded_user_ck(self) -> None:
+        """Hardcoded user 'ck' with password 'ck1234' must authenticate."""
+        assert user_auth.authenticate_user("ck", "ck1234") is True
+
+    def test_authenticate_hardcoded_user_seo(self) -> None:
+        """Hardcoded user 'seo' with password 'seo1234' must authenticate."""
+        assert user_auth.authenticate_user("seo", "seo1234") is True
+
+    def test_authenticate_hardcoded_user_wrong_password(self) -> None:
+        """Hardcoded user with wrong password must return ``False``."""
+        assert user_auth.authenticate_user("ck", "wrong_password") is False
+
+    def test_authenticate_hardcoded_user_case_sensitive(self) -> None:
+        """Hardcoded username must be case-sensitive."""
+        assert user_auth.authenticate_user("Ck", "ck1234") is False
+
 
 # ============================================================================
 # reset_password

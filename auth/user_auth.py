@@ -97,12 +97,27 @@ def register_user(username: str, password: str) -> Tuple[bool, str]:
     return True, "Success"
 
 
+# ── Hardcoded users (acceptable risk for this app) ──────────────────────────
+# Passwords are stored as salt$hash — generated via hash_password().
+# To add a user, run: python -c "from auth.user_auth import hash_password; print(hash_password('your-password'))"
+# then paste the result below with the desired username.
+
+_HARDCODED_USERS: dict[str, str] = {
+    # username: salt$hash
+    "ck": "2b37c58ad5261a85a81db224e218702c$b8556483543ee4e73969bdd39f5fed34911857ce3a8eee3fcd42d882f6746a19",
+    "seo": "c19872d5947beb56fd2d76aa71c0a004$5c9553d4e58728cc8a9363b898b3b4b2a70c7263fcc9eeb57d9dd3cc42d1194b",
+}
+
+# Passwords (stored in code for reference — never commit real passwords):
+#   ck  → ck1234
+#   seo → seo1234
+
+
 def authenticate_user(username: str, password: str) -> bool:
     """Authenticate *username* with *password*.
 
-    Checks TinyDB first (registered users).  Falls back to
-    ``AUTH_USERNAME`` / ``AUTH_PASSWORD`` environment variables
-    (for Heroku deployment where the filesystem is ephemeral).
+    Checks hardcoded users first, then falls back to TinyDB (for local
+    development), then env vars ``AUTH_USERNAME`` / ``AUTH_PASSWORD``.
 
     Returns ``True`` if the credentials are valid, ``False`` otherwise.
     """
@@ -110,14 +125,19 @@ def authenticate_user(username: str, password: str) -> bool:
         return False
     username = username.strip()
 
-    # 1. Check TinyDB (users registered during the session)
+    # 1. Hardcoded users (works everywhere, including Heroku)
+    stored_hash = _HARDCODED_USERS.get(username)
+    if stored_hash and verify_password(password, stored_hash):
+        return True
+
+    # 2. Check TinyDB (users registered during the session)
     db = _get_db()
     User = Query()
     results = db.search(User.username == username)
     if results:
         return verify_password(password, results[0]["password_hash"])
 
-    # 2. Fallback to env vars (for Heroku deployment)
+    # 3. Fallback to env vars (for Heroku deployment)
     env_user = os.environ.get("AUTH_USERNAME", "").strip()
     env_pass = os.environ.get("AUTH_PASSWORD", "")
     if env_user and env_pass:
