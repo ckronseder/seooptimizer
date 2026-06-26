@@ -465,23 +465,7 @@ if __name__ == "__main__":
         st.session_state.max_cache_hours = 24
 
     # ═══════════════════════════════════════════════════════════════════════
-    # PIPELINE COMPLETION CHECK — show results / error BEFORE the search UI
-    # so the user sees them on every re-render until they start a new search.
-    # ═══════════════════════════════════════════════════════════════════════
-
-    pipeline = st.session_state.get("pipeline")
-    if pipeline and pipeline.get("done"):
-        if pipeline.get("error"):
-            _render_error(pipeline["error"])
-        elif pipeline.get("result"):
-            _render_results(
-                pipeline["result"],
-                st.session_state.get("last_search_topic", ""),
-            )
-        st.divider()
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # ALWAYS-RENDERED SEARCH UI
+    # ALWAYS-RENDERED SEARCH UI (rendered BEFORE results so it stays at top)
     # ═══════════════════════════════════════════════════════════════════════
 
     # ── Handle history rerun ──────────────────────────────────────────────
@@ -601,6 +585,20 @@ if __name__ == "__main__":
         )
         thread.start()
         st.rerun()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # PIPELINE COMPLETION CHECK — show results / error BELOW the search UI
+    # ═══════════════════════════════════════════════════════════════════════
+
+    pipeline = st.session_state.get("pipeline")
+    if pipeline and pipeline.get("done"):
+        if pipeline.get("error"):
+            _render_error(pipeline["error"])
+        elif pipeline.get("result"):
+            _render_results(
+                pipeline["result"],
+                st.session_state.get("last_search_topic", ""),
+            )
 
     # ═══════════════════════════════════════════════════════════════════════
     # SHOW PIPELINE PROGRESS (auto-refreshing fragment)
