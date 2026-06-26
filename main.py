@@ -327,7 +327,7 @@ if __name__ == "__main__":
             st.session_state.rerun_topic = None  # clear after use
         else:
             st.markdown('<span class="step-badge">Step 1</span> Input search topic', unsafe_allow_html=True)
-            search_topic = st.text_input(" ")
+            search_topic = st.text_input(" ", key="search_topic_input")
             if not search_topic:
                 st.stop()  # nothing to do
 
