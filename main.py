@@ -29,7 +29,7 @@ from DataForSEO import client
 from searchstore import storesearches
 from vectordb import store as vectordb
 from graph import builder as graph_builder
-from auth import auth_ui, user_auth
+from auth import auth_ui
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -187,9 +187,6 @@ if __name__ == "__main__":
         st.session_state.authenticated = False
     if "username" not in st.session_state:
         st.session_state.username = None
-    if "auth_page" not in st.session_state:
-        st.session_state.auth_page = "login"
-
     if not st.session_state.authenticated:
         username = auth_ui.show_login_page()
         if username:
@@ -258,7 +255,6 @@ if __name__ == "__main__":
         if st.button("🚪 Logout"):
             st.session_state.authenticated = False
             st.session_state.username = None
-            st.session_state.auth_page = "login"
             st.rerun()
         st.divider()
 
