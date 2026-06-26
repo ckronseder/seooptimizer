@@ -298,7 +298,9 @@ if __name__ == "__main__":
     st.markdown('<div class="main-header"><h1>🔍 SEO Optimizer</h1><p>Generate SEO-optimized website structures from news articles</p></div>', unsafe_allow_html=True)
     st.divider()
 
-    # Initialise session state
+    # Initialise session state (pipeline + UI state)
+    if "step" not in st.session_state:
+        st.session_state.step = "idle"
     if "continue_clicked" not in st.session_state:
         st.session_state.continue_clicked = False
     if "selected_search_words" not in st.session_state:
@@ -312,276 +314,365 @@ if __name__ == "__main__":
     if "max_cache_hours" not in st.session_state:
         st.session_state.max_cache_hours = 24
 
-    # ── Step 1: Input topic ─────────────────────────────────────────────────
-    if st.session_state.rerun_topic:
-        search_topic = st.session_state.rerun_topic
-        st.markdown(f"**Rerunning search for:** {search_topic}")
-        st.session_state.rerun_topic = None  # clear after use
-    else:
-        st.markdown('<span class="step-badge">Step 1</span> Input search topic', unsafe_allow_html=True)
-        search_topic = st.text_input(" ")
-        if not search_topic:
-            st.stop()  # nothing to do
+    # ═══════════════════════════════════════════════════════════════════════
+    # STATE MACHINE — each step runs in its own Streamlit re-render so the
+    # frontend WebSocket never idles for more than a few seconds.
+    # ═══════════════════════════════════════════════════════════════════════
 
-    # Reset session when topic changes
-    if st.session_state.last_search_topic != search_topic:
-        st.session_state.selected_search_words = []
-        st.session_state.continue_clicked = False
-        st.session_state.last_search_topic = search_topic
+    if st.session_state.step == "idle":
+        # ── Topic input ────────────────────────────────────────────────────
+        if st.session_state.rerun_topic:
+            search_topic = st.session_state.rerun_topic
+            st.markdown(f"**Rerunning search for:** {search_topic}")
+            st.session_state.rerun_topic = None  # clear after use
+        else:
+            st.markdown('<span class="step-badge">Step 1</span> Input search topic', unsafe_allow_html=True)
+            search_topic = st.text_input(" ")
+            if not search_topic:
+                st.stop()  # nothing to do
 
-    # ── Fetch keywords ──────────────────────────────────────────────────────
-    st.divider()
-    try:
-        with st.spinner("Fetching keyword suggestions from DataForSEO..."):
-            google_keyword_list = google_keyword_search(search_topic)
-        if not google_keyword_list:
-            st.warning("No keyword suggestions returned. Try a different topic.")
-            st.stop()
-    except RuntimeError as exc:
-        st.error(f"🔴 {exc}")
-        logger.exception("Step 1 (keyword search) failed")
-        st.stop()
+        # Reset pipeline state when topic changes
+        if st.session_state.last_search_topic != search_topic:
+            st.session_state.selected_search_words = []
+            st.session_state.continue_clicked = False
+            st.session_state.last_search_topic = search_topic
+            # Clear any stale pipeline data
+            for _key in ("keywords", "url_list", "article_links", "all_articles",
+                         "companies_summary", "output_json", "search_id", "cache_hit",
+                         "progress_placeholder", "status_placeholder"):
+                st.session_state.pop(_key, None)
+            # Need fresh keywords for this topic
+            st.session_state.step = "fetch_keywords"
+            st.rerun()
 
-    # ── Step 2: User keyword selection ──────────────────────────────────────
-    st.markdown('<span class="step-badge">Step 2</span> Select search terms', unsafe_allow_html=True)
-    current_selection = st.pills(
-        "Select search words:",
-        options=google_keyword_list,
-        key="selected_search_words",
-        selection_mode="multi",
-    )
-    st.button(
-        ":grey-background[**Confirm selection and start searching**]",
-        on_click=set_continue_flag,
-    )
+        # If keywords are not yet fetched (initial load or after reset), go fetch
+        if not st.session_state.get("keywords"):
+            st.session_state.step = "fetch_keywords"
+            st.rerun()
 
-    # ── Step 3: Process ────────────────────────────────────────────────────
-    if not st.session_state.continue_clicked:
-        st.stop()
-
-    st.markdown("---")
-    st.markdown("**Step 3: Processing selected keywords**")
-
-    final_selection = st.session_state.selected_search_words
-    if not final_selection:
-        st.warning("Please select at least one keyword before continuing.")
-        st.stop()
-
-    st.write(f"Processing with selected words: {', '.join(final_selection)}")
-
-    # ── Check vector DB cache before scraping ────────────────────────────
-    search_id = vectordb.compute_search_id(search_topic, final_selection)
-    cached_articles = vectordb.get_cached_articles(
-        search_id,
-        min_count=5,
-        max_cache_hours=st.session_state.max_cache_hours,
-    )
-
-    if cached_articles:
-        st.toast(
-            f"Using {len(cached_articles)} cached articles from previous run",
-            icon="📦",
+        # ── Keyword selection (Step 2) ─────────────────────────────────────
+        st.markdown('<span class="step-badge">Step 2</span> Select search terms', unsafe_allow_html=True)
+        st.pills(
+            "Select search words:",
+            options=st.session_state.keywords,
+            key="selected_search_words",
+            selection_mode="multi",
         )
-        logger.info(
-            "Cache hit: using %d cached articles for search_id=%s",
-            len(cached_articles),
-            search_id,
-        )
-        all_articles = {a["url"]: a for a in cached_articles}
-        # Skip steps 3a-3c, go directly to Gemini
-    else:
-        st.toast("No cached articles found, scraping fresh", icon="🕸️")
-        logger.info(
-            "Cache miss: scraping fresh articles for search_id=%s", search_id
+        st.button(
+            ":grey-background[**Confirm selection and start searching**]",
+            on_click=set_continue_flag,
         )
 
-    if not cached_articles:
-        # ── 3a. Build URLs ─────────────────────────────────────────────────
-        try:
-            url_list = create_search_urls(final_selection)
-        except Exception as exc:
-            st.error(f"🔴 Failed to build search URLs: {exc}")
-            logger.exception("Step 3a (URL building) failed")
-            st.stop()
+        # ── When user confirms, check cache and transition ─────────────────
+        if st.session_state.get("continue_clicked"):
+            final_selection = st.session_state.selected_search_words
+            if not final_selection:
+                st.warning("Please select at least one keyword before continuing.")
+                st.stop()
 
-        # ── 3b. Extract article links from Google News ──────────────────────────
-        progress_bar_extract = st.progress(0, text="Starting download...")
-        status_text_extract = st.empty()
+            st.markdown("---")
+            st.markdown("**Step 3: Processing selected keywords**")
+            st.write(f"Processing with selected words: {', '.join(final_selection)}")
+
+            # Check vector DB cache
+            search_id = vectordb.compute_search_id(search_topic, final_selection)
+            st.session_state.search_id = search_id
+            cached_articles = vectordb.get_cached_articles(
+                search_id,
+                min_count=5,
+                max_cache_hours=st.session_state.max_cache_hours,
+            )
+
+            if cached_articles:
+                st.toast(
+                    f"Using {len(cached_articles)} cached articles from previous run",
+                    icon="📦",
+                )
+                logger.info(
+                    "Cache hit: using %d cached articles for search_id=%s",
+                    len(cached_articles),
+                    search_id,
+                )
+                st.session_state.all_articles = {a["url"]: a for a in cached_articles}
+                st.session_state.cache_hit = True
+                # Skip scraping steps, go directly to analysis
+                st.session_state.step = "analyze_articles"
+            else:
+                st.toast("No cached articles found, scraping fresh", icon="🕸️")
+                logger.info(
+                    "Cache miss: scraping fresh articles for search_id=%s", search_id
+                )
+                st.session_state.cache_hit = False
+                st.session_state.step = "build_urls"
+
+            # Create placeholders for pipeline progress/status
+            st.session_state.progress_placeholder = st.empty()
+            st.session_state.status_placeholder = st.empty()
+            st.rerun()
+
+        st.stop()  # stay in idle until user interacts
+
+    elif st.session_state.step == "fetch_keywords":
+        # ── Fetch keywords from DataForSEO ─────────────────────────────────
+        with st.session_state.get("progress_placeholder", st.empty()):
+            with st.spinner("Fetching keyword suggestions from DataForSEO..."):
+                try:
+                    topic = st.session_state.last_search_topic
+                    google_keyword_list = google_keyword_search(topic)
+                    if not google_keyword_list:
+                        st.warning("No keyword suggestions returned. Try a different topic.")
+                        st.session_state.step = "idle"
+                        st.stop()
+                    st.session_state.keywords = google_keyword_list
+                    st.session_state.step = "idle"
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"🔴 {exc}")
+                    logger.exception("Step 1 (keyword search) failed")
+                    st.session_state.step = "error"
+                    st.stop()
+
+    elif st.session_state.step == "build_urls":
+        # ── 3a. Build search URLs from keywords ────────────────────────────
+        with st.session_state.get("progress_placeholder", st.empty()):
+            with st.spinner("Building search URLs..."):
+                try:
+                    url_list = create_search_urls(st.session_state.selected_search_words)
+                    st.session_state.url_list = url_list
+                    logger.info("Built %d search URLs", len(url_list))
+                    st.session_state.step = "extract_links"
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"🔴 Failed to build search URLs: {exc}")
+                    logger.exception("Step 3a (URL building) failed")
+                    st.session_state.step = "error"
+                    st.stop()
+
+    elif st.session_state.step == "extract_links":
+        # ── 3b. Extract article links from Google News ─────────────────────
+        progress_bar = st.progress(0, text="Starting download...")
+        status_text = st.empty()
         try:
             with st.spinner(
                 "Downloading and extracting URLs from Google News... "
                 "This may take a moment."
             ):
-                status_text_extract.text(
-                    f"Downloading {len(url_list)} Google search pages..."
+                status_text.text(
+                    f"Downloading {len(st.session_state.url_list)} Google search pages..."
                 )
                 google_news = (
                     googlecrawler.extracturls_threading.download_google_news_threaded(
-                        url_list
+                        st.session_state.url_list
                     )
                 )
-                progress_bar_extract.progress(
+                progress_bar.progress(
                     70, text="Downloaded pages. Now extracting article links..."
                 )
                 article_links = googlecrawler.extracturls_threading.extract_urls(
                     google_news
                 )
-                progress_bar_extract.progress(
+                progress_bar.progress(
                     100, text="Google News link extraction complete!"
                 )
-                status_text_extract.text("Google News link extraction complete!")
+                status_text.text("Google News link extraction complete!")
+            st.session_state.article_links = article_links
+            st.toast(f"Found {len(article_links)} article links", icon="🔗")
+            st.session_state.step = "collect_articles"
+            st.rerun()
         except Exception as exc:
             st.error(f"🔴 Failed to extract article links: {exc}")
             logger.exception("Step 3b (link extraction) failed")
+            st.session_state.step = "error"
             st.stop()
         finally:
-            progress_bar_extract.empty()
-            status_text_extract.empty()
+            progress_bar.empty()
+            status_text.empty()
 
-        st.toast(f"Found {len(article_links)} article links", icon="🔗")
-
-        # ── 3c. Download and parse articles ─────────────────────────────────────
-        progress_bar_collect = st.progress(0, text="Starting article collection...")
-        status_text_collect = st.empty()
+    elif st.session_state.step == "collect_articles":
+        # ── 3c. Download and parse articles ────────────────────────────────
+        progress_bar = st.progress(0, text="Starting article collection...")
+        status_text = st.empty()
         try:
             with st.spinner(
                 "Collecting and parsing articles... "
                 "This can take some time based on the number of links."
             ):
-                status_text_collect.text(
-                    f"Downloading and parsing {len(article_links)} articles..."
+                status_text.text(
+                    f"Downloading and parsing {len(st.session_state.article_links)} articles..."
                 )
-                all_articles = collect_articles(article_links)
-                progress_bar_collect.progress(100, text="Article collection complete!")
-                status_text_collect.text("Article collection complete!")
+                all_articles = collect_articles(st.session_state.article_links)
+                progress_bar.progress(100, text="Article collection complete!")
+                status_text.text("Article collection complete!")
+            st.session_state.all_articles = all_articles
+            st.toast("Articles collected", icon="📰")
+            st.session_state.step = "store_articles_db"
+            st.rerun()
         except Exception as exc:
             st.error(f"🔴 Failed to collect articles: {exc}")
             logger.exception("Step 3c (article collection) failed")
+            st.session_state.step = "error"
             st.stop()
         finally:
-            progress_bar_collect.empty()
-            status_text_collect.empty()
+            progress_bar.empty()
+            status_text.empty()
 
-        st.toast("Articles collected", icon="📰")
+    elif st.session_state.step == "store_articles_db":
+        # ── Store freshly-scraped articles in vector DB ────────────────────
+        with st.session_state.get("progress_placeholder", st.empty()):
+            with st.spinner("Storing articles in vector database..."):
+                try:
+                    stored = vectordb.store_articles(
+                        st.session_state.all_articles,
+                        search_id=st.session_state.search_id,
+                    )
+                    logger.info("Stored %d articles in vector DB", stored)
+                    st.session_state.step = "analyze_articles"
+                    st.rerun()
+                except Exception as exc:
+                    logger.warning("Failed to store articles in vector DB: %s", exc)
+                    # Non-fatal — continue to analysis anyway
+                    st.session_state.step = "analyze_articles"
+                    st.rerun()
 
-    # ── Store articles in vector DB (only if freshly scraped) ──────────────
-    if not cached_articles:
+    elif st.session_state.step == "analyze_articles":
+        # ── 3d. Retrieve, rank, and run Gemini ─────────────────────────────
+        progress_bar = st.progress(0, text="Analyzing content...")
+        status_text = st.empty()
         try:
-            stored = vectordb.store_articles(all_articles, search_id=search_id)
-            logger.info("Stored %d articles in vector DB", stored)
+            with st.spinner("Analyzing content with AI..."):
+                status_text.text("Selecting best articles...")
+
+                search_topic = st.session_state.last_search_topic
+                final_selection = st.session_state.selected_search_words
+                all_articles = st.session_state.all_articles
+
+                # Build query from topic and keywords
+                query = f"{search_topic} {' '.join(final_selection)}"
+
+                # Retrieve relevant articles from vector DB
+                retrieved = vectordb.query_articles(query, top_k=15)
+
+                if retrieved:
+                    # Build graph and select top articles
+                    G = graph_builder.build_article_graph(retrieved, final_selection)
+                    selected = graph_builder.select_top_articles(G, retrieved, top_k=6)
+                    logger.info("Selected %d articles via graph ranking", len(selected))
+                else:
+                    # Fallback: use all articles directly
+                    selected = [
+                        {"url": url, "text": data["text"], "title": data.get("title", "")}
+                        for url, data in all_articles.items()
+                        if isinstance(data, dict) and data.get("text")
+                    ]
+
+                # Extract text for Gemini
+                article_texts = [a.get("text", "") for a in selected if a.get("text")]
+
+                if not article_texts:
+                    logger.warning(
+                        "No article texts available for Gemini — "
+                        "all articles had empty text"
+                    )
+                else:
+                    logger.info(
+                        "Passing %d article texts to Gemini. "
+                        "First article preview: %.200s...",
+                        len(article_texts),
+                        article_texts[0],
+                    )
+
+                status_text.text("Running AI analysis...")
+                companies_summary = create_sites(article_texts, st.session_state.keywords)
+
+                if not companies_summary:
+                    logger.warning(
+                        "Gemini returned None/empty for %d article texts. "
+                        "Check summarize_text logs for detailed debug info.",
+                        len(article_texts),
+                    )
+
+                progress_bar.progress(100, text="Analysis complete!")
+                status_text.text("Analysis complete!")
+
+            st.session_state.companies_summary = companies_summary
+            st.toast("Analysis complete!", icon="✅")
+            st.session_state.step = "display_results"
+            st.rerun()
         except Exception as exc:
-            logger.warning("Failed to store articles in vector DB: %s", exc)
+            st.error(f"🔴 AI analysis failed: {exc}")
+            logger.exception("Step 3d (Gemini summarization) failed")
+            st.session_state.step = "error"
+            st.stop()
+        finally:
+            progress_bar.empty()
+            status_text.empty()
 
-    # ── 3d. Retrieve, rank, and generate ─────────────────────────────────
-    progress_bar_ai = st.progress(0, text="Analyzing content...")
-    status_text_ai = st.empty()
-    try:
-        with st.spinner("Analyzing content with AI..."):
-            status_text_ai.text("Selecting best articles...")
+    elif st.session_state.step == "display_results":
+        # ── Display results + save history + reset to idle ─────────────────
+        search_topic = st.session_state.last_search_topic
+        final_selection = st.session_state.selected_search_words
+        companies_summary = st.session_state.get("companies_summary")
 
-            # Build query from topic and keywords
-            query = f"{search_topic} {' '.join(final_selection)}"
+        st.markdown("#### Generated Website Structures")
 
-            # Retrieve relevant articles from vector DB
-            retrieved = vectordb.query_articles(query, top_k=15)
+        if not companies_summary:
+            st.error(
+                "🔴 The AI was unable to generate website structures. "
+                "This may happen if articles had no readable text, the AI "
+                "response was blocked, or parsing failed. Check the terminal "
+                "logs for detailed debug information."
+            )
+        else:
+            cols = st.columns([1, 1], gap="large")
+            for i, site in enumerate(companies_summary):
+                with cols[i % 2]:
+                    with st.container(border=True):
+                        st.markdown(f"### 🌐 Website {site['website_number']}")
+                        st.markdown(f"**{site['title']}**")
+                        st.markdown(site['summary'])
 
-            if retrieved:
-                # Build graph and select top articles
-                G = graph_builder.build_article_graph(retrieved, final_selection)
-                selected = graph_builder.select_top_articles(G, retrieved, top_k=6)
-                logger.info("Selected %d articles via graph ranking", len(selected))
-            else:
-                # Fallback: use all articles directly
-                selected = [
-                    {"url": url, "text": data["text"], "title": data.get("title", "")}
-                    for url, data in all_articles.items()
-                    if isinstance(data, dict) and data.get("text")
-                ]
+                        qa_df = pd.DataFrame(site["qa_list"])
+                        st.dataframe(qa_df, use_container_width=True, hide_index=True)
 
-            # Extract text for Gemini
-            article_texts = [a.get("text", "") for a in selected if a.get("text")]
+                        st.markdown("**📎 Sources:**")
+                        for src in site['sources']:
+                            st.markdown(f"- {src}")
 
-            if not article_texts:
-                logger.warning(
-                    "No article texts available for Gemini — "
-                    "all articles had empty text"
-                )
-            else:
-                logger.info(
-                    "Passing %d article texts to Gemini. "
-                    "First article preview: %.200s...",
-                    len(article_texts),
-                    article_texts[0],
-                )
+            # ── Download button ────────────────────────────────────────────
+            topic_slug = search_topic.lower().replace(' ', '_')
+            topic_slug = ''.join(c for c in topic_slug if c.isalnum() or c == '_')
 
-            status_text_ai.text("Running AI analysis...")
-            companies_summary = create_sites(article_texts, google_keyword_list)
+            st.download_button(
+                label="📥 Download Website Structures (JSON)",
+                data=json.dumps(companies_summary, indent=2, ensure_ascii=False),
+                file_name=f"seo_structures_{topic_slug}.json",
+                mime="application/json",
+            )
 
-            if not companies_summary:
-                logger.warning(
-                    "Gemini returned None/empty for %d article texts. "
-                    "Check summarize_text logs for detailed debug info.",
-                    len(article_texts),
-                )
-            progress_bar_ai.progress(100, text="Analysis complete!")
-            status_text_ai.text("Analysis complete!")
-    except Exception as exc:
-        st.error(f"🔴 AI analysis failed: {exc}")
-        logger.exception("Step 3d (Gemini summarization) failed")
+        # ── Persist search to history ───────────────────────────────────────
+        try:
+            storesearches.save_search(
+                topic=search_topic,
+                keywords=final_selection,
+                result=companies_summary,
+            )
+            logger.info("Search saved to history for topic='%s'", search_topic)
+        except Exception as exc:
+            logger.warning("Failed to save search history: %s", exc)
+
+        # Reset to idle — do NOT call st.rerun() so the user sees the results
+        st.session_state.continue_clicked = False
+        st.session_state.step = "idle"
+
+    elif st.session_state.step == "error":
+        # ── Error state: show message and restart option ───────────────────
+        st.error("An error occurred during processing. See details above.")
+        if st.button("🔄 Start Over"):
+            st.session_state.continue_clicked = False
+            for _key in ("step", "keywords", "url_list", "article_links",
+                         "all_articles", "companies_summary", "output_json",
+                         "search_id", "cache_hit", "progress_placeholder",
+                         "status_placeholder"):
+                st.session_state.pop(_key, None)
+            st.rerun()
         st.stop()
-    finally:
-        progress_bar_ai.empty()
-        status_text_ai.empty()
-
-    st.toast("Analysis complete!", icon="✅")
-
-    # ── Display results ────────────────────────────────────────────────────
-    st.markdown("#### Generated Website Structures")
-
-    if not companies_summary:
-        st.error(
-            "🔴 The AI was unable to generate website structures. "
-            "This may happen if articles had no readable text, the AI "
-            "response was blocked, or parsing failed. Check the terminal "
-            "logs for detailed debug information."
-        )
-    else:
-        cols = st.columns([1, 1], gap="large")
-        for i, site in enumerate(companies_summary):
-            with cols[i % 2]:
-                with st.container(border=True):
-                    st.markdown(f"### 🌐 Website {site['website_number']}")
-                    st.markdown(f"**{site['title']}**")
-                    st.markdown(site['summary'])
-
-                    qa_df = pd.DataFrame(site["qa_list"])
-                    st.dataframe(qa_df, use_container_width=True, hide_index=True)
-
-                    st.markdown("**📎 Sources:**")
-                    for src in site['sources']:
-                        st.markdown(f"- {src}")
-
-        # ── Download button ────────────────────────────────────────────────
-        topic_slug = search_topic.lower().replace(' ', '_')
-        topic_slug = ''.join(c for c in topic_slug if c.isalnum() or c == '_')
-
-        st.download_button(
-            label="📥 Download Website Structures (JSON)",
-            data=json.dumps(companies_summary, indent=2, ensure_ascii=False),
-            file_name=f"seo_structures_{topic_slug}.json",
-            mime="application/json",
-        )
-
-    # ── Persist search to history ───────────────────────────────────────────
-    try:
-        storesearches.save_search(
-            topic=search_topic,
-            keywords=final_selection,
-            result=companies_summary,
-        )
-        logger.info("Search saved to history for topic='%s'", search_topic)
-    except Exception as exc:
-        logger.warning("Failed to save search history: %s", exc)
-
-    # Reset flag so next run waits for button again
-    st.session_state.continue_clicked = False

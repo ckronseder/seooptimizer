@@ -4,7 +4,7 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from config import config
 
 logger = logging.getLogger("Summary")
@@ -24,8 +24,10 @@ def _get_client() -> genai.Client:
 
 
 class QAPair(BaseModel):
-    question: str
-    answer: str
+    question: str = Field(alias="Q")
+    answer: str = Field(alias="A")
+
+    model_config = {"populate_by_name": True}
 
 
 class WebsiteStructure(BaseModel):

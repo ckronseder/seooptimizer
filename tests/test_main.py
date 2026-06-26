@@ -4,9 +4,10 @@ Tests for the ``main`` module.
 Covers:
 - That ``main.py`` can be imported without errors.
 - That the keyword-search function uses ``st.cache_data`` caching.
+- That ``vectordb.store`` functions handle ChromaDB errors gracefully.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -141,3 +142,240 @@ class TestPipelineFunctions:
             assert isinstance(result, list)
             assert len(result) == 1
             assert result[0]["website_number"] == 1
+
+
+# ============================================================================
+# VectorDB error-handling tests (graceful fallback on ChromaDB failures)
+# ============================================================================
+
+
+class TestVectorDBErrorHandling:
+    """The ``vectordb.store`` module should return safe fallback values when
+    ChromaDB raises exceptions (corrupted DB, incompatible embeddings, etc.)."""
+
+    # ------------------------------------------------------------------
+    # get_cached_articles
+    # ------------------------------------------------------------------
+
+    def test_get_cached_articles_returns_none_on_collection_error(
+        self,
+    ) -> None:
+        """``_get_collection`` failure → ``None``."""
+        from vectordb import store as vectordb
+
+        with patch(
+            "vectordb.store._get_collection",
+            side_effect=Exception("DB connection lost"),
+        ):
+            result = vectordb.get_cached_articles("some_id")
+            assert result is None
+
+    def test_get_cached_articles_returns_none_on_get_error(self) -> None:
+        """``collection.get`` failure → ``None``."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.get.side_effect = Exception("Get failed")
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.get_cached_articles("some_id")
+            assert result is None
+
+    def test_get_cached_articles_returns_none_on_missing_collection(
+        self,
+    ) -> None:
+        """Non-existent collection (simulated by empty results) → ``None``."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.get.return_value = {"ids": [], "metadatas": [], "documents": []}
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.get_cached_articles("some_id")
+            assert result is None
+
+    # ------------------------------------------------------------------
+    # store_articles
+    # ------------------------------------------------------------------
+
+    def test_store_articles_returns_count_on_success(self) -> None:
+        """Successful store returns the number of articles."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        articles = {
+            "https://example.com/1": {
+                "title": "Article 1",
+                "text": "Full text here.",
+            },
+        }
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.store_articles(articles, search_id="s1")
+            assert result == 1
+            mock_collection.add.assert_called_once()
+
+    def test_store_articles_returns_zero_on_collection_error(self) -> None:
+        """``_get_collection`` failure → ``0``."""
+        from vectordb import store as vectordb
+
+        with patch(
+            "vectordb.store._get_collection",
+            side_effect=Exception("DB connection lost"),
+        ):
+            result = vectordb.store_articles({}, search_id="s1")
+            assert result == 0
+
+    def test_store_articles_returns_zero_on_add_error(self) -> None:
+        """``collection.add`` failure → ``0``."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.add.side_effect = Exception("Add failed")
+        articles = {
+            "https://example.com/1": {
+                "title": "Article 1",
+                "text": "Full text here.",
+            },
+        }
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.store_articles(articles, search_id="s1")
+            assert result == 0
+
+    def test_store_articles_returns_zero_on_delete_error(self) -> None:
+        """``collection.delete`` failure → ``0``."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.delete.side_effect = Exception("Delete failed")
+        articles = {
+            "https://example.com/1": {
+                "title": "Article 1",
+                "text": "Full text here.",
+            },
+        }
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.store_articles(articles, search_id="s1")
+            assert result == 0
+
+    def test_store_articles_skips_articles_without_text(self) -> None:
+        """Articles without a 'text' key (or with empty text) are skipped."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        articles = {
+            "https://example.com/1": {"title": "No text here"},  # no 'text' key
+            "https://example.com/2": {"title": "X", "text": ""},  # empty text
+        }
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.store_articles(articles, search_id="s1")
+            assert result == 0
+            mock_collection.add.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # query_articles
+    # ------------------------------------------------------------------
+
+    def test_query_articles_returns_empty_on_collection_error(self) -> None:
+        """``_get_collection`` failure → ``[]``."""
+        from vectordb import store as vectordb
+
+        with patch(
+            "vectordb.store._get_collection",
+            side_effect=Exception("DB connection lost"),
+        ):
+            result = vectordb.query_articles("query")
+            assert result == []
+
+    def test_query_articles_returns_empty_on_empty_collection(self) -> None:
+        """Empty collection (``count() == 0``) → ``[]``."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.count.return_value = 0
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.query_articles("query")
+            assert result == []
+
+    def test_query_articles_returns_empty_on_query_error(self) -> None:
+        """``collection.query`` failure → ``[]``."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.count.return_value = 5
+        mock_collection.query.side_effect = Exception("Query failed")
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.query_articles("query")
+            assert result == []
+
+    def test_query_articles_returns_articles_on_success(self) -> None:
+        """Successful query returns a list of article dicts."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.count.return_value = 2
+        mock_collection.query.return_value = {
+            "ids": [["url1", "url2"]],
+            "metadatas": [[{"title": "A1"}, {"title": "A2"}]],
+            "documents": [["text1", "text2"]],
+            "distances": [[0.1, 0.2]],
+        }
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.query_articles("query", top_k=2)
+            assert len(result) == 2
+            assert result[0]["url"] == "url1"
+            assert result[0]["title"] == "A1"
+            assert result[0]["text"] == "text1"
+            assert result[1]["url"] == "url2"
+
+    # ------------------------------------------------------------------
+    # collection_size
+    # ------------------------------------------------------------------
+
+    def test_collection_size_returns_zero_on_error(self) -> None:
+        """``_get_collection`` failure → ``0``."""
+        from vectordb import store as vectordb
+
+        with patch(
+            "vectordb.store._get_collection",
+            side_effect=Exception("DB connection lost"),
+        ):
+            result = vectordb.collection_size()
+            assert result == 0
+
+    def test_collection_size_returns_count_on_success(self) -> None:
+        """Successful count returns the expected integer."""
+        from vectordb import store as vectordb
+
+        mock_collection = MagicMock()
+        mock_collection.count.return_value = 42
+        with patch(
+            "vectordb.store._get_collection",
+            return_value=mock_collection,
+        ):
+            result = vectordb.collection_size()
+            assert result == 42

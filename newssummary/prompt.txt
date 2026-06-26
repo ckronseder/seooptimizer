@@ -4,7 +4,7 @@ Antworte NUR mit einem JSON-Objekt, das einen einzigen Key "websites" enthält. 
   - website_number: 1, 2 oder 3
   - title: kurzer, klickbarer Titel, der das Nachrichten-Thema und einen interessanten Winkel enthält
   - summary: 2–3-Satz-Zusammenfassung, die alle Suchbegriffe einbindet und SEO-freundlich ist
-  - qa_list: 5–7 Frage-Antwort-Paare (jede Frage präzise, jede Antwort 2–4 Sätze, enthält mindestens einen Suchbegriff)
+  - qa_list: 5–7 Frage-Antwort-Paare (jede Frage präzise, jede Antwort 2–4 Sätze, enthält mindestens einen Suchbegriff) — verwende JSON-Objekte mit den Keys "question" und "answer" (z. B. {{"question": "…?", "answer": "…."}})
   - sources: Liste von URLs, die für den Artikel herangezogen wurden (mindestens 2)
 
 Die folgenden Nachrichtenartikel wurden aus einer Sammlung von Artikeln zu deinem Thema ausgewählt:
