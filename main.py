@@ -425,6 +425,25 @@ if __name__ == "__main__":
             st.session_state.status_placeholder = st.empty()
             st.rerun()
 
+        # ── Show previous results if available ────────────────────────────
+        if st.session_state.get("companies_summary") and not st.session_state.get("continue_clicked"):
+            st.markdown("---")
+            st.markdown("#### Previous Results")
+            cols = st.columns([1, 1], gap="large")
+            for i, site in enumerate(st.session_state.companies_summary):
+                with cols[i % 2]:
+                    with st.container(border=True):
+                        st.markdown(f"### 🌐 Website {site['website_number']}")
+                        st.markdown(f"**{site['title']}**")
+                        st.markdown(site['summary'])
+
+                        qa_df = pd.DataFrame(site["qa_list"])
+                        st.dataframe(qa_df, use_container_width=True, hide_index=True)
+
+                        st.markdown("**📎 Sources:**")
+                        for src in site['sources']:
+                            st.markdown(f"- {src}")
+
         st.stop()  # stay in idle until user interacts
 
     elif st.session_state.step == "fetch_keywords":
@@ -676,9 +695,10 @@ if __name__ == "__main__":
         except Exception as exc:
             logger.warning("Failed to save search history: %s", exc)
 
-        # Reset to idle — do NOT call st.rerun() so the user sees the results
+        # Reset to idle so the search UI appears again
         st.session_state.continue_clicked = False
         st.session_state.step = "idle"
+        st.rerun()  # rerender idle state which shows search UI + results
 
     elif st.session_state.step == "error":
         # ── Error state: show message and restart option ───────────────────
