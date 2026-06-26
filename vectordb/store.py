@@ -3,6 +3,10 @@ Vector database module for article embedding storage and semantic retrieval.
 
 Uses ChromaDB (persistent, file-based) with its built-in ONNX-based
 embedding function (all-MiniLM-L6-v2) — no heavy torch/transformers stack.
+
+All public functions handle corrupted / incompatible ChromaDB data gracefully
+by catching exceptions internally and returning a safe fallback value so the
+pipeline never crashes on stale vector DB state.
 """
 
 import datetime
@@ -67,9 +71,13 @@ def store_articles(articles: dict[str, Any], search_id: str = "") -> int:
         search_id: Tag to group articles by search query (default ``""``).
 
     Returns:
-        Number of articles stored.
+        Number of articles stored (0 if the store failed).
     """
-    collection = _get_collection()
+    try:
+        collection = _get_collection()
+    except Exception as exc:
+        logger.warning("Cannot open vector DB for storing: %s", exc)
+        return 0
 
     urls = []
     texts = []
@@ -95,17 +103,21 @@ def store_articles(articles: dict[str, Any], search_id: str = "") -> int:
 
     logger.info("Storing %d articles in vector DB...", len(urls))
 
-    # Delete only stale articles for this search_id (preserve other searches)
-    collection.delete(where={"search_id": search_id})
+    try:
+        # Delete only stale articles for this search_id (preserve other searches)
+        collection.delete(where={"search_id": search_id})
 
-    # ChromaDB auto-embeds documents using the collection's embedding function
-    collection.add(
-        ids=urls,
-        metadatas=metadatas,
-        documents=texts,
-    )
-    logger.info("Stored %d articles in vector DB", len(urls))
-    return len(urls)
+        # ChromaDB auto-embeds documents using the collection's embedding function
+        collection.add(
+            ids=urls,
+            metadatas=metadatas,
+            documents=texts,
+        )
+        logger.info("Stored %d articles in vector DB", len(urls))
+        return len(urls)
+    except Exception as exc:
+        logger.warning("Failed to store articles in vector DB: %s", exc)
+        return 0
 
 
 def get_cached_articles(
@@ -129,9 +141,17 @@ def get_cached_articles(
     Returns:
         List of article dicts if cache hit and enough articles, None otherwise.
     """
-    collection = _get_collection()
+    try:
+        collection = _get_collection()
+    except Exception as exc:
+        logger.warning("Cannot open vector DB for cache check: %s", exc)
+        return None
 
-    results = collection.get(where={"search_id": search_id})
+    try:
+        results = collection.get(where={"search_id": search_id})
+    except Exception as exc:
+        logger.warning("Cache lookup failed for search_id=%s: %s", search_id, exc)
+        return None
 
     if not results or not results["ids"] or len(results["ids"]) < min_count:
         logger.info(
@@ -194,17 +214,26 @@ def query_articles(query_text: str, top_k: int = 10) -> list[dict]:
 
     Returns:
         List of dicts with 'url', 'title', 'text', 'score' keys.
+        Returns an empty list if the vector DB is unavailable or incompatible.
     """
-    collection = _get_collection()
-
-    if collection.count() == 0:
+    try:
+        collection = _get_collection()
+    except Exception as exc:
+        logger.warning("Cannot open vector DB for query: %s", exc)
         return []
 
-    # ChromaDB auto-embeds the query using the collection's embedding function
-    results = collection.query(
-        query_texts=[query_text],
-        n_results=min(top_k, collection.count()),
-    )
+    try:
+        if collection.count() == 0:
+            return []
+
+        # ChromaDB auto-embeds the query using the collection's embedding function
+        results = collection.query(
+            query_texts=[query_text],
+            n_results=min(top_k, collection.count()),
+        )
+    except Exception as exc:
+        logger.warning("Vector DB query failed (stale embeddings?): %s", exc)
+        return []
 
     articles = []
     for i in range(len(results["ids"][0])):
@@ -220,4 +249,8 @@ def query_articles(query_text: str, top_k: int = 10) -> list[dict]:
 
 def collection_size() -> int:
     """Return the number of articles currently stored."""
-    return _get_collection().count()
+    try:
+        return _get_collection().count()
+    except Exception as exc:
+        logger.warning("Cannot read vector DB collection size: %s", exc)
+        return 0
