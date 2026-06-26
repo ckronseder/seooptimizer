@@ -2,7 +2,8 @@ import logging
 import re
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from pydantic import BaseModel
 from config import config
 
@@ -10,6 +11,16 @@ logger = logging.getLogger("Summary")
 
 # Path to the prompt template file (alongside this module)
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompt.txt"
+
+# Cached API client (lazily created)
+_client = None
+
+
+def _get_client() -> genai.Client:
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=config.GEM_API)
+    return _client
 
 
 class QAPair(BaseModel):
@@ -29,6 +40,21 @@ class WebsiteStructures(BaseModel):
     websites: list[WebsiteStructure]
 
 
+def _extract_text(response) -> str | None:
+    """Extract response text from a ``GenerateContentResponse``.
+
+    Handles both the new SDK (``candidates[0].content.parts[0].text``) and
+    the legacy SDK (``response.text``) as a safety net during migration.
+    """
+    text = getattr(response, "text", None)
+    if text:
+        return text
+    try:
+        return response.candidates[0].content.parts[0].text
+    except (IndexError, AttributeError, TypeError):
+        return None
+
+
 def summarize_text(
     text, search_words, model="gemini-2.5-flash"
 ) -> list[dict] | None:
@@ -46,8 +72,6 @@ def summarize_text(
         the input was empty, the response was blocked for safety, or an error
         occurred.
     """
-    genai.configure(api_key=config.GEM_API)
-
     if not text:
         return None
 
@@ -58,34 +82,41 @@ def summarize_text(
         search_words = ", ".join(search_words)
 
     try:
-        generation_config = genai.types.GenerationConfig(
-            response_mime_type="application/json",
-        )
-        model = genai.GenerativeModel(model, generation_config=generation_config)
+        client = _get_client()
         prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
         prompt = prompt_template.format(text=text, search_words=search_words)
 
-        response = model.generate_content(
-            prompt, request_options={"timeout": 180},
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                http_options=types.HttpOptions(timeout=180_000),
+            ),
         )
 
         # Check for safety blocks
         if response.candidates:
             finish_reason = response.candidates[0].finish_reason
-            if finish_reason == 3:  # SAFETY
+            if finish_reason == types.FinishReason.SAFETY:
                 logger.warning(
-                    "Response blocked for safety reasons (finish_reason=3)"
+                    "Response blocked for safety reasons (finish_reason=SAFETY)"
                 )
                 return None
 
+        resp_text = _extract_text(response)
+        if not resp_text:
+            logger.error("Gemini response has no text content")
+            return None
+
         # Parse structured response
         try:
-            parsed = WebsiteStructures.model_validate_json(response.text)
+            parsed = WebsiteStructures.model_validate_json(resp_text)
             return [site.model_dump() for site in parsed.websites]
         except Exception:
             # Fallback: try to extract JSON from markdown code blocks
             logger.warning("Direct JSON parsing failed; trying regex fallback...")
-            match = re.search(r"```(?:json)?\s*([\s\S]*?)```", response.text)
+            match = re.search(r"```(?:json)?\s*([\s\S]*?)```", resp_text)
             if match:
                 try:
                     parsed = WebsiteStructures.model_validate_json(match.group(1))
@@ -98,11 +129,11 @@ def summarize_text(
                 "Failed to parse Gemini response as JSON. "
                 "Finish reason: %s. Prompt length: %d chars. "
                 "Article count: %d. Full response:\n%s",
-                getattr(response.candidates[0], "finish_reason", "N/A")
+                response.candidates[0].finish_reason
                 if response.candidates else "NO_CANDIDATES",
                 len(prompt),
                 article_count,
-                response.text if response.text else "EMPTY",
+                resp_text if resp_text else "EMPTY",
             )
             return None
     except Exception as e:

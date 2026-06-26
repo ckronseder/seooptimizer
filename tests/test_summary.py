@@ -2,7 +2,7 @@
 Tests for the ``newssummary.summary`` module.
 
 Covers:
-- ``summarize_text()`` with mocked ``google.generativeai``.
+- ``summarize_text()`` with mocked ``google.genai.Client``.
 - Valid inputs, empty text, empty search_words.
 - Verification that the prompt contains expected content.
 - Structured output parsing via Pydantic schemas.
@@ -10,6 +10,8 @@ Covers:
 
 import json
 from unittest.mock import MagicMock, patch
+
+from google.genai import types
 
 from newssummary import summary
 
@@ -39,24 +41,23 @@ def _valid_json_response(
     return json.dumps(data)
 
 
-class TestSummarizeText:
-    """``summarize_text()`` with mocked Gemini API."""
+def _build_mock_response(
+    text: str,
+    finish_reason=types.FinishReason.STOP,
+) -> types.GenerateContentResponse:
+    """Build a real ``GenerateContentResponse`` with the given text and finish reason."""
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(parts=[types.Part(text=text)]),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
 
-    def _mock_gemini_response(
-        self,
-        text: str = "Mocked summary response",
-        finish_reason: int = 1,
-    ):
-        """Helper: return a mock GenerativeModel whose ``generate_content``
-        returns a response with the given text and finish reason."""
-        mock_model = MagicMock()
-        mock_response = MagicMock()
-        mock_response.text = text
-        mock_candidate = MagicMock()
-        mock_candidate.finish_reason = finish_reason
-        mock_response.candidates = [mock_candidate]
-        mock_model.generate_content.return_value = mock_response
-        return mock_model
+
+class TestSummarizeText:
+    """``summarize_text()`` with mocked Gemini API client."""
 
     # ── Successful calls ────────────────────────────────────────────────
 
@@ -64,10 +65,12 @@ class TestSummarizeText:
         """When the model returns a valid JSON response matching the schema,
         ``summarize_text`` must return a list of dicts with the expected keys."""
         json_str = _valid_json_response(website_number=1, title="SEO Test")
+        mock_response = _build_mock_response(json_str)
 
-        with patch.object(summary.genai, "GenerativeModel") as mock_model_cls:
-            mock_model = self._mock_gemini_response(json_str)
-            mock_model_cls.return_value = mock_model
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = mock_response
 
             result = summary.summarize_text(
                 "Some article content.", ["SEO", "test"]
@@ -84,16 +87,19 @@ class TestSummarizeText:
 
     def test_prompt_contains_search_words(self) -> None:
         """The generated prompt must include the provided search words."""
-        with patch.object(summary.genai, "GenerativeModel") as mock_model_cls:
-            mock_model = self._mock_gemini_response("output")
-            mock_model_cls.return_value = mock_model
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = _build_mock_response(
+                "output"
+            )
 
             summary.summarize_text("Article body.", ["keyword1", "keyword2"])
 
             # Capture the prompt that was passed to generate_content
-            call_args = mock_model.generate_content.call_args
+            call_args = mock_client.models.generate_content.call_args
             assert call_args is not None
-            prompt = call_args[0][0]
+            prompt = call_args.kwargs.get("contents", "")
             assert "keyword1" in prompt
             assert "keyword2" in prompt
 
@@ -101,30 +107,36 @@ class TestSummarizeText:
         """The generated prompt must include the actual article text."""
         article_text = "This is the article body content for testing."
 
-        with patch.object(summary.genai, "GenerativeModel") as mock_model_cls:
-            mock_model = self._mock_gemini_response("output")
-            mock_model_cls.return_value = mock_model
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = _build_mock_response(
+                "output"
+            )
 
             summary.summarize_text(article_text, ["test"])
 
-            call_args = mock_model.generate_content.call_args
+            call_args = mock_client.models.generate_content.call_args
             assert call_args is not None
-            prompt = call_args[0][0]
+            prompt = call_args.kwargs.get("contents", "")
             assert article_text in prompt
 
     def test_list_of_texts_joined(self) -> None:
         """When ``text`` is a list, the function must join them before prompting."""
         texts = ["First article body.", "Second article body."]
 
-        with patch.object(summary.genai, "GenerativeModel") as mock_model_cls:
-            mock_model = self._mock_gemini_response("output")
-            mock_model_cls.return_value = mock_model
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = _build_mock_response(
+                "output"
+            )
 
             summary.summarize_text(texts, ["test"])
 
-            call_args = mock_model.generate_content.call_args
+            call_args = mock_client.models.generate_content.call_args
             assert call_args is not None
-            prompt = call_args[0][0]
+            prompt = call_args.kwargs.get("contents", "")
             assert "First article body." in prompt
             assert "Second article body." in prompt
             # The separator between texts should be present
@@ -132,15 +144,18 @@ class TestSummarizeText:
 
     def test_list_of_search_words_joined(self) -> None:
         """When ``search_words`` is a list, it must be joined into a comma-separated string."""
-        with patch.object(summary.genai, "GenerativeModel") as mock_model_cls:
-            mock_model = self._mock_gemini_response("output")
-            mock_model_cls.return_value = mock_model
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = _build_mock_response(
+                "output"
+            )
 
             summary.summarize_text("Article.", ["SEO", "tools", "2025"])
 
-            call_args = mock_model.generate_content.call_args
+            call_args = mock_client.models.generate_content.call_args
             assert call_args is not None
-            prompt = call_args[0][0]
+            prompt = call_args.kwargs.get("contents", "")
             # The search words should appear joined
             assert "SEO, tools, 2025" in prompt or all(
                 w in prompt for w in ["SEO", "tools", "2025"]
@@ -169,23 +184,56 @@ class TestSummarizeText:
     def test_gemini_api_exception_returns_none(self) -> None:
         """If the Gemini API raises an exception, the function must return
         ``None``."""
-        with patch.object(summary.genai, "GenerativeModel") as mock_model_cls:
-            mock_model = MagicMock()
-            mock_model.generate_content.side_effect = RuntimeError(
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.side_effect = RuntimeError(
                 "API rate limit exceeded"
             )
-            mock_model_cls.return_value = mock_model
 
             result = summary.summarize_text("Article body.", ["test"])
 
             assert result is None
 
-    def test_model_creation_failure_returns_none(self) -> None:
-        """If creating the GenerativeModel itself fails, return ``None``."""
+    def test_client_creation_failure_returns_none(self) -> None:
+        """If creating the client itself fails, return ``None``."""
         with patch.object(
-            summary.genai,
-            "GenerativeModel",
-            side_effect=Exception("Model not available"),
+            summary,
+            "_get_client",
+            side_effect=Exception("Client creation failed"),
         ):
+            result = summary.summarize_text("Article body.", ["test"])
+            assert result is None
+
+    def test_safety_block_returns_none(self) -> None:
+        """A safety-blocked response must return ``None``."""
+        mock_response = _build_mock_response(
+            "blocked", finish_reason=types.FinishReason.SAFETY
+        )
+
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = mock_response
+
+            result = summary.summarize_text("Article body.", ["test"])
+            assert result is None
+
+    def test_empty_response_text_returns_none(self) -> None:
+        """A response with no text parts must return ``None``."""
+        empty_response = types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(parts=[types.Part(text="")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ]
+        )
+
+        with patch.object(summary, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_client.models.generate_content.return_value = empty_response
+
             result = summary.summarize_text("Article body.", ["test"])
             assert result is None
