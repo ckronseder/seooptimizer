@@ -313,11 +313,25 @@ if __name__ == "__main__":
         st.session_state.rerun_keywords = None
     if "max_cache_hours" not in st.session_state:
         st.session_state.max_cache_hours = 24
+    if "rerun_count" not in st.session_state:
+        st.session_state.rerun_count = 0
 
     # ═══════════════════════════════════════════════════════════════════════
     # STATE MACHINE — each step runs in its own Streamlit re-render so the
     # frontend WebSocket never idles for more than a few seconds.
     # ═══════════════════════════════════════════════════════════════════════
+
+    # ── Infinite-loop guard: count & limit state-machine transitions ──────
+    if st.session_state.step not in ("idle", "error"):
+        st.session_state.rerun_count = st.session_state.get("rerun_count", 0) + 1
+        if st.session_state.rerun_count > 20:
+            st.session_state.step = "error"
+            st.error(
+                "The pipeline detected an unexpected loop. "
+                "Please refresh the page and start over."
+            )
+    else:
+        st.session_state.rerun_count = 0
 
     if st.session_state.step == "idle":
         # ── Topic input ────────────────────────────────────────────────────
@@ -346,7 +360,8 @@ if __name__ == "__main__":
             st.rerun()
 
         # If keywords are not yet fetched (initial load or after reset), go fetch
-        if not st.session_state.get("keywords"):
+        # Use 'is None' so that an empty list [] does NOT trigger a re-fetch
+        if st.session_state.get("keywords") is None:
             st.session_state.step = "fetch_keywords"
             st.rerun()
 
@@ -421,8 +436,9 @@ if __name__ == "__main__":
                     google_keyword_list = google_keyword_search(topic)
                     if not google_keyword_list:
                         st.warning("No keyword suggestions returned. Try a different topic.")
+                        st.session_state.keywords = []  # not None — prevents re-fetch loop
                         st.session_state.step = "idle"
-                        st.stop()
+                        st.rerun()
                     st.session_state.keywords = google_keyword_list
                     st.session_state.step = "idle"
                     st.rerun()
@@ -430,7 +446,7 @@ if __name__ == "__main__":
                     st.error(f"🔴 {exc}")
                     logger.exception("Step 1 (keyword search) failed")
                     st.session_state.step = "error"
-                    st.stop()
+                    st.rerun()
 
     elif st.session_state.step == "build_urls":
         # ── 3a. Build search URLs from keywords ────────────────────────────
@@ -446,7 +462,7 @@ if __name__ == "__main__":
                     st.error(f"🔴 Failed to build search URLs: {exc}")
                     logger.exception("Step 3a (URL building) failed")
                     st.session_state.step = "error"
-                    st.stop()
+                    st.rerun()
 
     elif st.session_state.step == "extract_links":
         # ── 3b. Extract article links from Google News ─────────────────────
@@ -483,7 +499,7 @@ if __name__ == "__main__":
             st.error(f"🔴 Failed to extract article links: {exc}")
             logger.exception("Step 3b (link extraction) failed")
             st.session_state.step = "error"
-            st.stop()
+            st.rerun()
         finally:
             progress_bar.empty()
             status_text.empty()
@@ -511,7 +527,7 @@ if __name__ == "__main__":
             st.error(f"🔴 Failed to collect articles: {exc}")
             logger.exception("Step 3c (article collection) failed")
             st.session_state.step = "error"
-            st.stop()
+            st.rerun()
         finally:
             progress_bar.empty()
             status_text.empty()
@@ -602,7 +618,7 @@ if __name__ == "__main__":
             st.error(f"🔴 AI analysis failed: {exc}")
             logger.exception("Step 3d (Gemini summarization) failed")
             st.session_state.step = "error"
-            st.stop()
+            st.rerun()
         finally:
             progress_bar.empty()
             status_text.empty()
