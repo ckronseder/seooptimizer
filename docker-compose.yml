@@ -16,9 +16,9 @@ services:
     env_file: .env
     volumes:
       - chroma_data:/app/chroma_db
-      - search_history:/app/search_history.json
+      - app_data:/app/data
     restart: unless-stopped
 
 volumes:
   chroma_data:
-  search_history:
+  app_data:

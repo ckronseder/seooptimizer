@@ -10,6 +10,7 @@ document database).  Each search record contains:
 """
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tinydb import TinyDB, Query
@@ -17,8 +18,8 @@ from tinydb import TinyDB, Query
 # ---------------------------------------------------------------------------
 # Database initialisation
 # ---------------------------------------------------------------------------
-_DB_PATH = "search_history.json"
-_db = TinyDB(_DB_PATH)
+_DB_PATH = str(Path("data") / "search_history.json")
+_db = TinyDB(_DB_PATH, create_dirs=True)
 _search_table = _db.table("searches")
 _SearchQuery = Query()
 

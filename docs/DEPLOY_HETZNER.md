@@ -150,7 +150,7 @@ docker compose down
 # Backup
 tar -czf seooptimizer-backup-$(date +%Y%m%d).tar.gz \
   /var/lib/docker/volumes/seooptimizer_chroma_data/ \
-  /var/lib/docker/volumes/seooptimizer_search_history/
+  /var/lib/docker/volumes/seooptimizer_app_data/
 
 # Start again
 docker compose up -d

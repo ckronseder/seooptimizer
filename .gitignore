@@ -35,3 +35,4 @@ auth/users.json
 .pytest_cache/
 chroma_db/
 search_history.json
+data/

@@ -47,5 +47,6 @@ README.md
 *.log
 chroma_db/
 search_history.json
+data/
 SEOlogo.png
 opencode.jsonc
