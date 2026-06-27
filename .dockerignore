@@ -1,0 +1,51 @@
+# ── Environment ─────────────────────────────────────────────────────
+.env
+.env.*
+
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+.venv/
+venv/
+env/
+
+# ── Version control ─────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── IDE / Editor ────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Test & development ─────────────────────────────────────────────
+tests/
+.pytest_cache/
+.coverage
+*.coverage
+htmlcov/
+
+# ─── Documentation (not needed in production image) ────────────────
+docs/
+README.md
+
+# ── Project specific ────────────────────────────────────────────────
+*.log
+chroma_db/
+search_history.json
+SEOlogo.png
+opencode.jsonc

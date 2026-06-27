@@ -14,7 +14,7 @@ Architecture:
   - Search UI (topic input, pills, confirm) is always rendered.
   - Pipeline runs in a background daemon thread so the UI stays responsive.
   - An auto-refreshing @st.fragment polls progress every 2 s, which keeps
-    the Heroku WebSocket alive indefinitely.
+    the Streamlit WebSocket alive indefinitely.
   - No state machine, no st.rerun() chains — just linear pipeline logic
     in a thread, with a shared dict for progress reporting.
 """
@@ -274,7 +274,7 @@ def _run_pipeline_impl(
 def _show_pipeline_progress() -> None:
     """Auto-refreshing fragment that reads progress from the shared dict.
 
-    Runs every 2 seconds, which keeps the Heroku WebSocket alive
+    Runs every 2 seconds, which keeps the Streamlit WebSocket alive
     (resets the 55 s idle timer on each execution).
     """
     pipeline = st.session_state.get("pipeline")

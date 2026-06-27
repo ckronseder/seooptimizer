@@ -125,7 +125,7 @@ def authenticate_user(username: str, password: str) -> bool:
         return False
     username = username.strip()
 
-    # 1. Hardcoded users (works everywhere, including Heroku)
+    # 1. Hardcoded users (works everywhere)
     stored_hash = _HARDCODED_USERS.get(username)
     if stored_hash and verify_password(password, stored_hash):
         return True
@@ -137,7 +137,7 @@ def authenticate_user(username: str, password: str) -> bool:
     if results:
         return verify_password(password, results[0]["password_hash"])
 
-    # 3. Fallback to env vars (for Heroku deployment)
+    # 3. Fallback to env vars
     env_user = os.environ.get("AUTH_USERNAME", "").strip()
     env_pass = os.environ.get("AUTH_PASSWORD", "")
     if env_user and env_pass:
