@@ -46,12 +46,13 @@ WORKDIR /app
 
 COPY --chown=appuser:appuser . .
 
-EXPOSE 8501
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
-USER appuser
+EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8501}/_stcore/health').read()"
 
-ENTRYPOINT ["streamlit", "run", "main.py", "--server.address=0.0.0.0"]
-CMD ["--server.port=8501"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["streamlit", "run", "main.py", "--server.address=0.0.0.0", "--server.port=8501"]
