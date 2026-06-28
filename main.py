@@ -351,6 +351,59 @@ def _render_error(error_msg: str) -> None:
         st.rerun()
 
 
+# ======================== Helper: analyze cached articles ===================
+
+
+def _run_analyze_cached(
+    cached_articles: list,
+    search_topic: str,
+    selected_words: list,
+    keywords: list,
+) -> list | None:
+    """Run graph + Gemini on cached articles synchronously (main thread)."""
+    try:
+        all_articles = {a["url"]: a for a in cached_articles}
+        query = f"{search_topic} {' '.join(selected_words)}"
+        retrieved = vectordb.query_articles(query, top_k=15)
+        if retrieved:
+            G = graph_builder.build_article_graph(retrieved, selected_words)
+            selected = graph_builder.select_top_articles(G, retrieved, top_k=6)
+        else:
+            selected = [
+                {"url": url, "text": data["text"], "title": data.get("title", "")}
+                for url, data in all_articles.items()
+                if isinstance(data, dict) and data.get("text")
+            ]
+        article_texts = [a.get("text", "") for a in selected if a.get("text")]
+        if not article_texts:
+            logger.warning("No article texts available for cached analysis")
+            return None
+        return create_sites(article_texts, keywords)
+    except Exception as exc:
+        logger.exception("Cached analysis failed")
+        return None
+
+
+# ======================== Helper: save & store result =======================
+
+
+def _save_and_store_result(
+    companies_summary: list,
+    search_topic: str,
+    selected_words: list,
+) -> None:
+    """Persist a completed result to search history."""
+    try:
+        storesearches.save_search(
+            topic=search_topic,
+            keywords=selected_words,
+            result=companies_summary,
+        )
+        logger.info("Search saved to history for topic='%s'", search_topic)
+    except Exception as exc:
+        logger.warning("Failed to save search history: %s", exc)
+
+
 # =========================== Streamlit Application ===========================
 
 if __name__ == "__main__":
@@ -607,56 +660,3 @@ if __name__ == "__main__":
     pipeline = st.session_state.get("pipeline")
     if pipeline and not pipeline.get("done"):
         _show_pipeline_progress()
-
-
-# ======================== Helper: analyze cached articles ===================
-
-
-def _run_analyze_cached(
-    cached_articles: list,
-    search_topic: str,
-    selected_words: list,
-    keywords: list,
-) -> list | None:
-    """Run graph + Gemini on cached articles synchronously (main thread)."""
-    try:
-        all_articles = {a["url"]: a for a in cached_articles}
-        query = f"{search_topic} {' '.join(selected_words)}"
-        retrieved = vectordb.query_articles(query, top_k=15)
-        if retrieved:
-            G = graph_builder.build_article_graph(retrieved, selected_words)
-            selected = graph_builder.select_top_articles(G, retrieved, top_k=6)
-        else:
-            selected = [
-                {"url": url, "text": data["text"], "title": data.get("title", "")}
-                for url, data in all_articles.items()
-                if isinstance(data, dict) and data.get("text")
-            ]
-        article_texts = [a.get("text", "") for a in selected if a.get("text")]
-        if not article_texts:
-            logger.warning("No article texts available for cached analysis")
-            return None
-        return create_sites(article_texts, keywords)
-    except Exception as exc:
-        logger.exception("Cached analysis failed")
-        return None
-
-
-# ======================== Helper: save & store result =======================
-
-
-def _save_and_store_result(
-    companies_summary: list,
-    search_topic: str,
-    selected_words: list,
-) -> None:
-    """Persist a completed result to search history."""
-    try:
-        storesearches.save_search(
-            topic=search_topic,
-            keywords=selected_words,
-            result=companies_summary,
-        )
-        logger.info("Search saved to history for topic='%s'", search_topic)
-    except Exception as exc:
-        logger.warning("Failed to save search history: %s", exc)
